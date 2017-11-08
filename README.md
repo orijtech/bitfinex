@@ -1,0 +1,2 @@
+# bitfinex
+Bitfinex API client
