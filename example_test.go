@@ -17,10 +17,10 @@ package bitfinex_test
 import (
 	"log"
 
-	"github.com/orijtech/bitfinex"
+	"github.com/orijtech/bitfinex/v1"
 )
 
-func Example_client_Subscribe() {
+func Example_client_RealtimeTicker() {
 	client, err := bitfinex.NewClient()
 	if err != nil {
 		log.Fatal(err)
@@ -47,4 +47,16 @@ func Example_client_Subscribe() {
 	for ticker := range tkChan {
 		log.Printf("ticker: %+v\n", ticker)
 	}
+}
+
+func Example_client_Ticker() {
+	client, err := bitfinex.NewClient()
+	if err != nil {
+		log.Fatal(err)
+	}
+	tk, err := client.Ticker("BTC-USD")
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("current ticker: %+v\n", tk)
 }

@@ -19,6 +19,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +29,8 @@ import (
 )
 
 type Client struct {
+	rt http.RoundTripper
+	mu sync.RWMutex
 }
 
 func NewClient() (*Client, error) {
@@ -168,6 +173,7 @@ type Ticker struct {
 	Volume      float64   `json:"volume,omitempty"`
 	High        float64   `json:"high,omitempty"`
 	Low         float64   `json:"low,omitempty"`
+	Mid         float64   `json:"mid,omitempty"`
 
 	DailyChangePercentage float64 `json:"daily_change_percent,omitempty"`
 
@@ -192,4 +198,71 @@ func (tk *Ticker) UnmarshalJSON(b []byte) error {
 		*(ptrs[i]) = value
 	}
 	return nil
+}
+
+type restTicker struct {
+	Mid       float64 `json:"mid,string"`
+	Bid       float64 `json:"bid,string"`
+	Ask       float64 `json:"ask,string"`
+	LastPrice float64 `json:"last_price,string"`
+	Low       float64 `json:"low,string"`
+	High      float64 `json:"high,string"`
+	Volume    float64 `json:"vol,string"`
+	Timestamp float64 `json:"timestamp,string"`
+}
+
+func (rt *restTicker) toTicker() *Ticker {
+	if rt == nil {
+		return nil
+	}
+
+	s := int64(rt.Timestamp)
+	ns := int64((rt.Timestamp - float64(s)) * 1e9)
+
+	return &Ticker{
+		Mid:    rt.Mid,
+		Bid:    rt.Bid,
+		Ask:    rt.Ask,
+		Low:    rt.Low,
+		High:   rt.High,
+		Volume: rt.Volume,
+
+		TimeAt:    time.Unix(s, ns),
+		LastPrice: rt.LastPrice,
+	}
+}
+
+func (c *Client) Ticker(symbol string) (*Ticker, error) {
+	symbol = strings.Replace(symbol, "-", "", -1)
+	fullURL := "https://api.bitfinex.com/v1/pubticker/" + symbol
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	blob, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	rt := new(restTicker)
+	if err := json.Unmarshal(blob, rt); err != nil {
+		return nil, err
+	}
+	return rt.toTicker(), nil
+}
+
+func (c *Client) SetHTTPRoundTripper(rt http.RoundTripper) {
+	c.mu.Lock()
+	c.rt = rt
+	c.mu.Unlock()
+}
+
+func (c *Client) httpClient() *http.Client {
+	c.mu.Lock()
+	rt := c.rt
+	c.mu.Unlock()
+	return &http.Client{Transport: rt}
 }
