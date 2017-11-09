@@ -137,12 +137,12 @@ func parseIt(msg *wsu.Message) (interface{}, error) {
 }
 
 func parseTicker(msg *wsu.Message) (*Ticker, error) {
-	tk := new(Ticker)
+	tk := new(realTimeTicker)
 	if err := json.Unmarshal(msg.Frame, tk); err != nil {
 		return nil, err
 	}
 	tk.TimeAt = msg.TimeAt
-	return tk, nil
+	return (*Ticker)(tk), nil
 }
 
 func parseSubscription(msg *wsu.Message) (*Subscription, error) {
@@ -160,7 +160,9 @@ type Subscription struct {
 	Pair      string  `json:"pair"`
 }
 
-type Ticker struct {
+type Ticker realTimeTicker
+
+type realTimeTicker struct {
 	TimeAt      time.Time `json:"time_at,omitempty"`
 	Pair        string    `json:"pair,omitempty"`
 	ChannelID   float64   `json:"ch_id,omitempty"`
@@ -170,17 +172,23 @@ type Ticker struct {
 	AskSize     float64   `json:"ask_size,omitempty"`
 	DailyChange float64   `json:"daily_change,omitempty"`
 	LastPrice   float64   `json:"last_price,omitempty"`
-	Volume      float64   `json:"volume,omitempty"`
 	High        float64   `json:"high,omitempty"`
 	Low         float64   `json:"low,omitempty"`
 	Mid         float64   `json:"mid,omitempty"`
+
+	DayVolume   float64 `json:"d_vol,omitempty"`
+	WeekVolume  float64 `json:"w_vol,omitempty"`
+	MonthVolume float64 `json:"m_vol,omitempty"`
 
 	DailyChangePercentage float64 `json:"daily_change_percent,omitempty"`
 
 	Err error `json:"err,omitempty"`
 }
 
-func (tk *Ticker) UnmarshalJSON(b []byte) error {
+// realTimerTicker messages come in the form of [., ., ., ., .,]
+// However, we need Ticker to be unmarshaled as {"...": ...}
+// hence the alias of the type as Ticker won't inhert the UnmarshalJSON
+func (tk *realTimeTicker) UnmarshalJSON(b []byte) error {
 	// First drill is to parse them as []float64
 	var values []float64
 	if err := json.Unmarshal(b, &values); err != nil {
@@ -189,7 +197,7 @@ func (tk *Ticker) UnmarshalJSON(b []byte) error {
 	ptrs := []*float64{
 		&tk.ChannelID, &tk.Bid, &tk.BidSize, &tk.Ask,
 		&tk.AskSize, &tk.DailyChange, &tk.DailyChangePercentage,
-		&tk.LastPrice, &tk.Volume, &tk.High, &tk.Low,
+		&tk.LastPrice, &tk.DayVolume, &tk.High, &tk.Low,
 	}
 	for i, value := range values {
 		if i >= len(ptrs) {
@@ -220,20 +228,24 @@ func (rt *restTicker) toTicker() *Ticker {
 	ns := int64((rt.Timestamp - float64(s)) * 1e9)
 
 	return &Ticker{
-		Mid:    rt.Mid,
-		Bid:    rt.Bid,
-		Ask:    rt.Ask,
-		Low:    rt.Low,
-		High:   rt.High,
-		Volume: rt.Volume,
+		Mid:       rt.Mid,
+		Bid:       rt.Bid,
+		Ask:       rt.Ask,
+		Low:       rt.Low,
+		High:      rt.High,
+		DayVolume: rt.Volume,
 
 		TimeAt:    time.Unix(s, ns),
 		LastPrice: rt.LastPrice,
 	}
 }
 
+func bitfinexSymbol(symbol string) string {
+	return strings.Replace(symbol, "-", "", -1)
+}
+
 func (c *Client) Ticker(symbol string) (*Ticker, error) {
-	symbol = strings.Replace(symbol, "-", "", -1)
+	symbol = bitfinexSymbol(symbol)
 	fullURL := "https://api.bitfinex.com/v1/pubticker/" + symbol
 	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
@@ -251,7 +263,13 @@ func (c *Client) Ticker(symbol string) (*Ticker, error) {
 	if err := json.Unmarshal(blob, rt); err != nil {
 		return nil, err
 	}
-	return rt.toTicker(), nil
+	tk := rt.toTicker()
+	if volumes, _ := c.VolumeInDays(symbol); volumes != nil {
+		tk.DayVolume = volumes.Day
+		tk.WeekVolume = volumes.Week
+		tk.MonthVolume = volumes.Month
+	}
+	return tk, nil
 }
 
 func (c *Client) SetHTTPRoundTripper(rt http.RoundTripper) {
@@ -265,4 +283,55 @@ func (c *Client) httpClient() *http.Client {
 	rt := c.rt
 	c.mu.Unlock()
 	return &http.Client{Transport: rt}
+}
+
+type volume struct {
+	Days   float64 `json:"period"`
+	Volume float64 `json:"volume,string"`
+}
+
+// Volume returns a mapping of days to volume as per
+// https://api.bitfinex.com/v1/stats/ETHUSD
+// For example
+// {
+//    1:  100387.9,
+//    7:  990387.9,
+//    30: 6990387.9,
+// }
+
+type Volume struct {
+	Day   float64 `json:"day,omitempty"`
+	Week  float64 `json:"week,omitempty"`
+	Month float64 `json:"month,omitempty"`
+}
+
+func (c *Client) VolumeInDays(symbol string) (*Volume, error) {
+	symbol = bitfinexSymbol(symbol)
+	fullURL := "https://api.bitfinex.com/v1/stats/" + symbol
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	blob, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	var volumes []volume
+	if err := json.Unmarshal(blob, &volumes); err != nil {
+		return nil, err
+	}
+	periodsMap := make(map[int]float64)
+	for _, vol := range volumes {
+		periodsMap[int(vol.Days)] = vol.Volume
+	}
+	vol := &Volume{
+		Day:   periodsMap[1],
+		Week:  periodsMap[7],
+		Month: periodsMap[30],
+	}
+	return vol, nil
 }
