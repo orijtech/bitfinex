@@ -16,25 +16,76 @@ package bitfinex
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/orijtech/otils"
 	"github.com/orijtech/wsu"
 )
 
 type Client struct {
 	rt http.RoundTripper
 	mu sync.RWMutex
+
+	_apiKey, _apiSecret string
 }
 
 func NewClient() (*Client, error) {
 	return new(Client), nil
+}
+
+const (
+	envKeyKey    = "BITFINEX_API_KEY"
+	envSecretKey = "BITFINEX_API_SECRET"
+)
+
+func NewClientFromEnv() (*Client, error) {
+	var errsList []string
+	apiKey, errMsg := fromEnv(envKeyKey)
+	if errMsg != "" {
+		errsList = append(errsList, errMsg)
+	}
+	apiSecret, errMsg := fromEnv(envSecretKey)
+	if errMsg != "" {
+		errsList = append(errsList, errMsg)
+	}
+	if len(errsList) > 0 {
+		return nil, errors.New(strings.Join(errsList, "\n"))
+	}
+	c := &Client{_apiKey: apiKey, _apiSecret: apiSecret}
+	return c, nil
+}
+
+func fromEnv(key string) (value, errMsg string) {
+	if value = os.Getenv(key); value != "" {
+		return value, ""
+	}
+	return "", fmt.Sprintf("%q was not set", key)
+}
+
+type Credentials struct {
+	Key    string `json:"key"`
+	Secret string `json:"secret"`
+}
+
+func (c *Client) SetCredentials(ak *Credentials) {
+	if ak == nil {
+		ak = new(Credentials)
+	}
+	c.mu.Lock()
+	c._apiKey = ak.Key
+	c._apiSecret = ak.Secret
+	c.mu.Unlock()
 }
 
 type TickerSubscription struct {
@@ -244,9 +295,11 @@ func bitfinexSymbol(symbol string) string {
 	return strings.Replace(symbol, "-", "", -1)
 }
 
+const baseURL = "https://api.bitfinex.com/v1"
+
 func (c *Client) Ticker(symbol string) (*Ticker, error) {
 	symbol = bitfinexSymbol(symbol)
-	fullURL := "https://api.bitfinex.com/v1/pubticker/" + symbol
+	fullURL := fmt.Sprintf("%s/pubticker/%s", baseURL, symbol)
 	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
 		return nil, err
@@ -334,4 +387,52 @@ func (c *Client) VolumeInDays(symbol string) (*Volume, error) {
 		Month: periodsMap[30],
 	}
 	return vol, nil
+}
+
+func (c *Client) apiKey() string {
+	c.mu.Lock()
+	key := c._apiKey
+	c.mu.Unlock()
+	return key
+}
+
+func (c *Client) apiSecret() string {
+	c.mu.Lock()
+	secret := c._apiSecret
+	c.mu.Unlock()
+	return secret
+}
+
+func (c *Client) doAuthReq(req *http.Request, payload map[string]interface{}) ([]byte, http.Header, error) {
+	blob, err := json.Marshal(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	encodedStr := base64.StdEncoding.EncodeToString(blob)
+	sig := hmac.New(sha512.New384, []byte(c.apiSecret()))
+	sig.Write([]byte(encodedStr))
+
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("X-BFX-APIKEY", c.apiKey())
+	req.Header.Add("X-BFX-PAYLOAD", encodedStr)
+	req.Header.Add("X-BFX-SIGNATURE", fmt.Sprintf("%x", sig.Sum(nil)))
+
+	res, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if res.Body != nil {
+		defer res.Body.Close()
+	}
+	if !otils.StatusOK(res.StatusCode) {
+		if res.Body != nil {
+			if blob, err := ioutil.ReadAll(res.Body); err == nil && len(blob) > 0 {
+				return nil, res.Header, errors.New(string(blob))
+			}
+		}
+		return nil, res.Header, errors.New(res.Status)
+	}
+	blob, err = ioutil.ReadAll(res.Body)
+	return blob, res.Header, err
 }

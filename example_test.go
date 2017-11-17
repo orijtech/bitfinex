@@ -60,3 +60,17 @@ func Example_client_Ticker() {
 	}
 	log.Printf("current ticker: %+v\n", tk)
 }
+
+func Example_client_Balances() {
+	client, err := bitfinex.NewClientFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	balances, err := client.Balances()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for i, balance := range balances {
+		log.Printf("#%d: %+v\n", i, balance)
+	}
+}
