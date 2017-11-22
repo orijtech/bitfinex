@@ -403,7 +403,7 @@ func (c *Client) apiSecret() string {
 	return secret
 }
 
-func (c *Client) doAuthReq(req *http.Request, payload map[string]interface{}) ([]byte, http.Header, error) {
+func (c *Client) doAuthReq(req *http.Request, payload interface{}) ([]byte, http.Header, error) {
 	blob, err := json.Marshal(payload)
 	if err != nil {
 		return nil, nil, err

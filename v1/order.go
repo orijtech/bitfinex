@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/orijtech/otils"
@@ -87,6 +88,10 @@ type OrderResponse struct {
 	RemainingAmount float64 `json:"remaining_amount,string,omitempty"`
 	ExecutedAmount  float64 `json:"executed_amount,string,omitempty"`
 	OrderID         uint64  `json:"order_id,omitempty"`
+
+	// OCOOrderID will be set if the order is
+	// an OCO order, otherwise it will be null.
+	OCOOrderID interface{} `json:"oco_order,omitempty"`
 }
 
 type Type string
@@ -115,6 +120,7 @@ var (
 	errBlankOrderType   = errors.New("expecting an order type")
 	errBlankOrderSide   = errors.New("expecting an order side")
 	errBlankOrderPrice  = errors.New("expecting an order price")
+	errBlankOrderID     = errors.New("expecting an order id")
 )
 
 func (o *Order) Validate() error {
@@ -131,6 +137,18 @@ func (o *Order) Validate() error {
 		return errBlankOrderPrice
 	}
 	return nil
+}
+
+func (c *Client) doAuthReqParseOrderResponse(req *http.Request, payload interface{}) (*OrderResponse, error) {
+	blob, _, err := c.doAuthReq(req, payload)
+	if err != nil {
+		return nil, err
+	}
+	resp := new(OrderResponse)
+	if err := json.Unmarshal(blob, resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (c *Client) Order(order *Order) (*OrderResponse, error) {
@@ -155,15 +173,7 @@ func (c *Client) Order(order *Order) (*OrderResponse, error) {
 	payload["request"] = "/v1/order/new"
 	payload["nonce"] = fmt.Sprintf("%v", time.Now().Unix()*1e4)
 	payload["exchange"] = "bitfinex"
-	blob, _, err = c.doAuthReq(req, payload)
-	if err != nil {
-		return nil, err
-	}
-	resp := new(OrderResponse)
-	if err := json.Unmarshal(blob, resp); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return c.doAuthReqParseOrderResponse(req, payload)
 }
 
 // Sell is a convenience method to sell a currency instead of invoking Order.
@@ -184,4 +194,75 @@ func (c *Client) Buy(amount float64, symbol string, price float64, typ Type) (*O
 		Price:  price,
 		Type:   typ,
 	})
+}
+
+func bitfinexID(inID interface{}) (interface{}, error) {
+	// Bitfinex orderIDs are int64 values
+	// and the goal here is to convert all losely accepted
+	// ids since we mostly save them as string values
+	switch t := inID.(type) {
+	default:
+		return t, nil
+	case int:
+		return int64(t), nil
+	case uint:
+		return int64(t), nil
+	case uint64:
+		return int64(t), nil
+	case string, []byte:
+		i64, err := strconv.ParseInt(fmt.Sprintf("%v", t), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return i64, nil
+	}
+}
+
+func (c *Client) Status(id interface{}) (*OrderResponse, error) {
+	orderIDV, err := bitfinexID(id)
+	if err != nil {
+		return nil, err
+	}
+	if orderIDV == nil {
+		return nil, errBlankOrderID
+	}
+	orderID := orderIDV.(int64)
+	fullURL := fmt.Sprintf("%s/order/status", baseURL)
+	req, err := http.NewRequest("POST", fullURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]interface{}{
+		"order_id": orderID,
+		"request":  "/v1/order/new",
+		"nonce":    fmt.Sprintf("%v", time.Now().Unix()*1e4),
+		"exchange": "bitfinex",
+	}
+	return c.doAuthReqParseOrderResponse(req, payload)
+}
+
+func (c *Client) Cancel(id interface{}) (*OrderResponse, error) {
+	orderIDV, err := bitfinexID(id)
+	if err != nil {
+		return nil, err
+	}
+	if orderIDV == nil {
+		return nil, errBlankOrderID
+	}
+	orderID := orderIDV.(int64)
+
+	fullURL := fmt.Sprintf("%s/order/cancel", baseURL)
+	req, err := http.NewRequest("POST", fullURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]interface{}{
+		"id":       orderID,
+		"request":  "/v1/order/cancel",
+		"nonce":    fmt.Sprintf("%v", time.Now().Unix()*1e4),
+		"exchange": "bitfinex",
+	}
+	return c.doAuthReqParseOrderResponse(req, payload)
 }

@@ -121,3 +121,29 @@ func Example_client_Order() {
 	}
 	log.Printf("Response: %+v\n", res)
 }
+
+func Example_client_Status() {
+	client, err := bitfinex.NewClientFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	res, err := client.Status(446915287)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Response: %+v\n", res)
+}
+
+func Example_client_Cancel() {
+	client, err := bitfinex.NewClientFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	res, err := client.Cancel(446915287)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Response: %+v\n", res)
+}

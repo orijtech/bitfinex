@@ -32,7 +32,9 @@ import (
 )
 
 const (
-	orderRoute = "/order"
+	orderRoute       = "/order-make"
+	orderCancelRoute = "/order-cancel"
+	orderStatusRoute = "/order-status"
 
 	key1    = "^key1$"
 	key2    = "     k e72*"
@@ -86,6 +88,88 @@ func TestOrders(t *testing.T) {
 	}
 }
 
+func TestOrderStatus(t *testing.T) {
+	tests := [...]struct {
+		key, secret string
+
+		id  interface{}
+		err string
+	}{
+		0: {"", "", nil, "expecting "},
+		1: {key1, secret1, nil, "expecting"},
+		2: {
+			key1, secret1, "448364249", "",
+		},
+		3: {
+			key1, secret1, 448364249, "",
+		},
+	}
+
+	for i, tt := range tests {
+		client := new(bitfinex.Client)
+		client.SetCredentials(&bitfinex.Credentials{Key: tt.key, Secret: tt.secret})
+		client.SetHTTPRoundTripper(&testRoundTripper{route: orderStatusRoute})
+
+		res, err := client.Status(tt.id)
+		if tt.err != "" {
+			if err == nil {
+				t.Errorf("#%d: want non-nil error to contain %q", i, tt.err)
+			} else if g, w := err.Error(), tt.err; !strings.Contains(g, w) {
+				t.Errorf("#%d: got %q want %q", i, g, w)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("#%d: unexpected error: %v", i, err)
+			continue
+		}
+		if res == nil || reflect.DeepEqual(res, blankOrderResponse) {
+			t.Errorf("#%d:: want non-blank OrderResposne", i)
+		}
+	}
+}
+
+func TestOrderCancel(t *testing.T) {
+	tests := [...]struct {
+		key, secret string
+
+		id  interface{}
+		err string
+	}{
+		0: {"", "", nil, "expecting "},
+		1: {key1, secret1, nil, "expecting"},
+		2: {
+			key1, secret1, "448364249", "",
+		},
+		3: {
+			key1, secret1, 448364249, "",
+		},
+	}
+
+	for i, tt := range tests {
+		client := new(bitfinex.Client)
+		client.SetCredentials(&bitfinex.Credentials{Key: tt.key, Secret: tt.secret})
+		client.SetHTTPRoundTripper(&testRoundTripper{route: orderCancelRoute})
+
+		res, err := client.Cancel(tt.id)
+		if tt.err != "" {
+			if err == nil {
+				t.Errorf("#%d: want non-nil error to contain %q", i, tt.err)
+			} else if g, w := err.Error(), tt.err; !strings.Contains(g, w) {
+				t.Errorf("#%d: got %q want %q", i, g, w)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("#%d: unexpected error: %v", i, err)
+			continue
+		}
+		if res == nil || reflect.DeepEqual(res, blankOrderResponse) {
+			t.Errorf("#%d:: want non-blank OrderResposne", i)
+		}
+	}
+}
+
 type testRoundTripper struct {
 	route string
 }
@@ -96,9 +180,61 @@ func (tr *testRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	switch tr.route {
 	case orderRoute:
 		return tr.orderRoundTrip(req)
+	case orderStatusRoute:
+		return tr.orderStatusRoundTrip(req)
+	case orderCancelRoute:
+		return tr.orderCancelRoundTrip(req)
 	default:
 		return makeResp("Unimplemented", http.StatusBadRequest, nil), nil
 	}
+}
+
+func (tr *testRoundTripper) orderStatusRoundTrip(req *http.Request) (*http.Response, error) {
+	blob, badRes, err := checkBadAuth(req, "POST")
+	if badRes != nil {
+		return badRes, nil
+	}
+	if err != nil {
+		return makeResp(err.Error(), http.StatusBadRequest, nil), nil
+	}
+	recv := make(map[string]interface{})
+	if err := json.Unmarshal(blob, &recv); err != nil {
+		return makeResp(err.Error(), http.StatusBadRequest, nil), nil
+	}
+	orderID, ok := recv["order_id"]
+	if !ok {
+		return makeResp(`could not find "order_id"`, http.StatusBadRequest, nil), nil
+	}
+	i64, ok := orderID.(int64)
+	if !ok {
+		i64 = int64(orderID.(float64))
+	}
+	fullPath := fmt.Sprintf("./testdata/order-%v.json", i64)
+	return respFromFile(fullPath)
+}
+
+func (tr *testRoundTripper) orderCancelRoundTrip(req *http.Request) (*http.Response, error) {
+	blob, badRes, err := checkBadAuth(req, "POST")
+	if badRes != nil {
+		return badRes, nil
+	}
+	if err != nil {
+		return makeResp(err.Error(), http.StatusBadRequest, nil), nil
+	}
+	recv := make(map[string]interface{})
+	if err := json.Unmarshal(blob, &recv); err != nil {
+		return makeResp(err.Error(), http.StatusBadRequest, nil), nil
+	}
+	orderID, ok := recv["id"]
+	if !ok {
+		return makeResp(`could not find "id"`, http.StatusBadRequest, nil), nil
+	}
+	i64, ok := orderID.(int64)
+	if !ok {
+		i64 = int64(orderID.(float64))
+	}
+	fullPath := fmt.Sprintf("./testdata/order-cancel-%v.json", i64)
+	return respFromFile(fullPath)
 }
 
 func (tr *testRoundTripper) orderRoundTrip(req *http.Request) (*http.Response, error) {
@@ -161,6 +297,9 @@ func bodyAndAuthSignature(req *http.Request) ([]byte, error) {
 func respFromFile(p string) (*http.Response, error) {
 	f, err := os.Open(p)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return makeResp(err.Error(), http.StatusNotFound, nil), nil
+		}
 		return makeResp(err.Error(), http.StatusBadRequest, nil), nil
 	}
 	return makeResp("200 OK", http.StatusOK, f), nil
