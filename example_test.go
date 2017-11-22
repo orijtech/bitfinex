@@ -74,3 +74,50 @@ func Example_client_Balances() {
 		log.Printf("#%d: %+v\n", i, balance)
 	}
 }
+
+func Example_client_Buy() {
+	client, err := bitfinex.NewClientFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Buy 3/4 BTC at $7500USD
+	res, err := client.Buy(0.75, "BTCUSD", 7500, bitfinex.Limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Response: %+v\n", res)
+}
+
+func Example_client_Sell() {
+	client, err := bitfinex.NewClientFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Sell 107.3 ETH at $400USD
+	res, err := client.Buy(107.3, "ETHUSD", 7500, bitfinex.Limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Response: %+v\n", res)
+}
+
+func Example_client_Order() {
+	client, err := bitfinex.NewClientFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Sell off all the LTC that we've got.
+	res, err := client.Order(&bitfinex.Order{
+		Side:            bitfinex.Sell,
+		Symbol:          "ETHBTC",
+		Price:           400,
+		Type:            bitfinex.FillOrKill,
+		UseAllAvailable: true,
+		Hidden:          true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Response: %+v\n", res)
+}
