@@ -305,8 +305,19 @@ func (c *Client) Ticker(symbol string) (*Ticker, error) {
 		return nil, err
 	}
 	res, err := c.httpClient().Do(req)
+	if res.Body != nil {
+		defer res.Body.Close()
+	}
 	if err != nil {
 		return nil, err
+	}
+	if !otils.StatusOK(res.StatusCode) {
+		if res.Body != nil {
+			if blob, err := ioutil.ReadAll(res.Body); err == nil && len(blob) > 0 {
+				return nil, errors.New(string(blob))
+			}
+		}
+		return nil, errors.New(res.Status)
 	}
 	blob, err := ioutil.ReadAll(res.Body)
 	if err != nil {
